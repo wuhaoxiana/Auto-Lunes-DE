@@ -7,8 +7,8 @@
 | Secret 名称        | 是否必填 | 说明 |
 |--------------------|----------|------|
 | LUNES              | ✅ 必填  | 格式 `邮箱-----密码`，Lunes 平台登录凭证 |
-| LUNES_SERVER_ID    | ❌ 可选  | 服务器 ID，默认 89950 |
-| SESSION_COOKIE     | ❌ 可选  | 预置 session cookie 值，可跳过完整登录流程 |
+| LUNES_SERVER_ID    | ✅ 必填  | 服务器 ID，默认 89950 |
+| SESSION_COOKIE     | ✅ 必填  | 预置 session cookie 值，可跳过完整登录流程 |
 | NODE_LINK          | ❌ 可选  | 代理链接（vless:// vmess:// trojan:// hysteria2:// 等） |
 | TG_BOT_TOKEN       | ❌ 可选  | Telegram Bot Token（用于发送通知） |
 | TG_CHAT_ID         | ❌ 可选  | Telegram Chat ID |
