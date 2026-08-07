@@ -1,29 +1,33 @@
-## Lunes Host 自动保活（GitHub Actions）
+## 🚀 lunes host 自动登录续期（GitHub Actions）
 
-基于 GitHub Actions 的自动化脚本，定时登录 [Lunes Host](https://betadash.lunes.host/) 并访问服务器页面，保持账号活跃，避免因长时间不活动被暂停。
+这是一个基于 GitHub Actions 的自动化脚本，用于定时登录自动续期[lunes host](https://betadash.lunes.host/) 应用。
 
-### Secrets 配置说明
+⚠️ 有cf盾,太垃圾的机房节点可能过不了，建议用稍微干净点的节点  [B2proxy住宅代理](https://www.b2proxy.com/signup?code=0F5133)
 
-| Secret 名称        | 是否必填 | 说明 |
-|--------------------|----------|------|
-| LUNES              | ✅ 必填  | 格式 `邮箱-----密码`，Lunes 平台登录凭证 |
-| LUNES_SERVER_ID    | ✅ 必填  | 服务器 ID，默认 89950 |
-| SESSION_COOKIE     | ✅ 必填  | 预置 session cookie 值，可跳过完整登录流程 |
-| NODE_LINK          | ❌ 可选  | 代理链接（vless:// vmess:// trojan:// hysteria2:// 等） |
-| TG_BOT_TOKEN       | ❌ 可选  | Telegram Bot Token（用于发送通知） |
-| TG_CHAT_ID         | ❌ 可选  | Telegram Chat ID |
+━━━━━━━━━━━━━━━━━━━━━━
 
-### 部署步骤
+🔐 Secrets 配置说明
 
-1. Fork 本项目，在 Actions 菜单允许工作流
-2. 在 `Settings` ➡ `Secrets and variables` ➡ `Actions` 添加上方 Secrets
-3. 去 Actions 菜单手动试运行工作流
-4. 定时任务默认每月 1/11/21 号执行，可在 `renew.yml` 调整 cron
+| Secret 名称         | 是否必填 | 说明                                              |
+|---------------------|----------|---------------------------------------------------|
+| LUNES_EMAIL     | ✅ 必填  | lunes 登录邮箱                                    |
+| LUNES_PASSWORD  | ✅ 必填  | lunes 登录密码                                    | 
+| NODE_LINK       | ❌ 可选  | 代理链接，如 vless:// vmess:// tuic:// hysteria2:// anttls:// socks5://|
+| TG_BOT_TOKEN    | ❌ 可选  | Telegram Bot Token（用于发送通知）                     |
+| TG_CHAT_ID      | ❌ 可选  | Telegram Chat ID（接收通知的用户或群组 ID）              |
 
-### SESSION_COOKIE 获取
+━━━━━━━━━━━━━━━━━━━━━━
+### 代理格式（确认在v2rayN里使用正常的节点）
 
-登录后从浏览器开发者工具中获取名为 `session` 的 cookie 值，添加到 Secrets 中可跳过每次的完整登录流程。
+`NODE_LINK` 支持以下任意一种代理协议的完整分享链接（不配置则直连）：
 
-### 免责声明
+- **VLESS**：`vless://uuid@server:port?security=reality&sni=...&type=ws&...`
+- **VMess**：`vmess://base64encoded...`
+- **Trojan**：`trojan://password@server:port?sni=...&type=ws&...`
+- **tuic**：`tuic://uuid:password@server:port...`
+- **anytls**：`anytls://uuid@server:port...`
+- **hysteria2**：`hysteria2://base64@server:port...`
+- **SOCKS5**：`socks5://user:pass@server:port` 或 `socks://user:pass@server:port`
 
-本程序仅供学习了解，非盈利目的。使用本程序必须遵守部署服务器所在地、所在国家和用户所在国家的法律法规。
+### 注意事项
+- 尽量添加一个干净的节点，以免过不了cf盾

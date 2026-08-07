@@ -1,545 +1,392 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-import os, re, sys, time, json, pickle, platform, subprocess, logging
+import os
+import time
+import subprocess
 import requests
-from datetime import datetime
-from pathlib import Path
-from typing import Optional
-
+import re
 from seleniumbase import SB
-from seleniumbase.common.exceptions import TimeoutException
 
-# ================== 配置 ==================
-LUNES_LOGIN_URL = "https://betadash.lunes.host/login"
-LUNES_BASE = "https://betadash.lunes.host"
+# 从环境变量获取账号密码和 TG 配置
+EMAIL        = os.environ.get("LUNES_EMAIL") or ""     # 登录邮箱
+PASSWORD     = os.environ.get("LUNES_PASSWORD") or ""  # 登录密码
+TG_CHAT_ID   = os.environ.get("TG_CHAT_ID") or ""      # chat id,可选
+TG_BOT_TOKEN = os.environ.get("TG_BOT_TOKEN") or ""    # bot token,可选
 
-SERVER_ID = os.environ.get("LUNES_SERVER_ID") or "89950"
-SERVER_URL = f"{LUNES_BASE}/servers/{SERVER_ID}"
+LOGIN_URL = "https://betadash.lunes.host/login?next=/"
 
-OUTPUT_DIR = Path("output/screenshots")
-COOKIE_FILE = Path("session_cookies.pkl")
-OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+#  Telegram 推送
+def send_tg_message(status_icon, status_text, extra_text=""):
+    if not TG_BOT_TOKEN or not TG_CHAT_ID:
+        print("ℹ️ 未配置 TG_BOT_TOKEN 或 TG_CHAT_ID，跳过 Telegram 推送。")
+        return
 
-# ================== 日志 ==================
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S"
-)
-logger = logging.getLogger("lunes-keep")
+    local_time = time.gmtime(time.time() + 8 * 3600)
+    current_time_str = time.strftime("%Y-%m-%d %H:%M:%S", local_time)
 
-
-# ================== 辅助函数 ==================
-def is_linux() -> bool:
-    return platform.system().lower() == "linux"
-
-
-def mask_url(url: str) -> str:
-    return re.sub(r'/servers/\d+', '/servers/***', url)
-
-
-def mask_email(email: str) -> str:
-    if '@' not in email:
-        return email[:1] + "***"
-    local, domain = email.split('@', 1)
-    masked_local = local[:1] + "***" if local else "***"
-    if '.' in domain:
-        parts = domain.split('.')
-        first_char = domain[0]
-        masked_domain = f"{first_char}***.{parts[-1]}"
-    else:
-        masked_domain = domain[:1] + "***"
-    return f"{masked_local}@{masked_domain}"
-
-
-def setup_display():
-    if is_linux() and not os.environ.get("DISPLAY"):
-        try:
-            from pyvirtualdisplay import Display
-            display = Display(visible=False, size=(1920, 1080))
-            display.start()
-            os.environ["DISPLAY"] = display.new_display_var
-            logger.info("虚拟显示已启动")
-            return display
-        except Exception as e:
-            logger.error(f"虚拟显示启动失败: {e}")
-            sys.exit(1)
-    return None
-
-
-def screenshot_path(name: str) -> str:
-    return str(OUTPUT_DIR / f"{datetime.now().strftime('%H%M%S')}-{name}.png")
-
-
-def safe_screenshot(sb, path: str):
-    try:
-        sb.save_screenshot(path)
-        logger.info(f"截图 -> {Path(path).name}")
-    except Exception as e:
-        logger.warning(f"截图失败: {e}")
-
-
-def notify_telegram(email: str, ok: bool, msg: str = "", screenshot_file: str = None):
-    try:
-        token = os.environ.get("TG_BOT_TOKEN")
-        chat_id = os.environ.get("TG_CHAT_ID")
-        if not token or not chat_id:
-            return
-
-        status = "Lunes 保活成功" if ok else "Lunes 保活失败"
-        lines = [
-            f"{'✅' if ok else '❌'} {status}",
-            "",
-            f"账号：{mask_email(email)}",
-        ]
-        if msg:
-            lines.append(f"信息：{msg}")
-        lines.append(f"时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        lines.append(f"服务器 ID: {SERVER_ID}")
-        lines.append("")
-        lines.append("Lunes Host Auto Keep Alive")
-        text = "\n".join(lines)
-
-        if screenshot_file and Path(screenshot_file).exists():
-            with open(screenshot_file, "rb") as f:
-                requests.post(
-                    f"https://api.telegram.org/bot{token}/sendPhoto",
-                    data={"chat_id": chat_id, "caption": text},
-                    files={"photo": f},
-                    timeout=60
-                )
+    if '@' in EMAIL:
+        name, domain = EMAIL.split('@', 1)
+        if len(name) > 4:
+            masked_email = f"{name[:2]}****{name[-2:]}@{domain}"
         else:
-            requests.post(
-                f"https://api.telegram.org/bot{token}/sendMessage",
-                json={"chat_id": chat_id, "text": text, "disable_web_page_preview": True},
-                timeout=30
-            )
-    except Exception as e:
-        logger.warning(f"Telegram 通知失败: {e}")
+            masked_email = f"{name}@{domain}"
+    else:
+        masked_email = EMAIL[:2] + '****'
 
+    text = (
+        f"🇺🇸 Lunes 保活通知\n\n"
+        f"{status_icon} {status_text}\n"
+        f"👤 登录账户: {masked_email}\n"
+        f"⏱️ 登录时间: {current_time_str}"
+    )
+    if extra_text:
+        text += f"\n\n{extra_text}"
 
-def check_and_exit_on_rate_limit(sb, email: str) -> None:
+    url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage"
+    payload = {"chat_id": TG_CHAT_ID, "text": text}
+    
     try:
-        page_source = sb.get_page_source()
-        if "Too Many Requests" in page_source or "20 per 1 hour" in page_source:
-            logger.error("检测到速率限制: Too Many Requests / 20 per 1 hour")
-            sp = screenshot_path("rate-limit")
-            safe_screenshot(sb, sp)
-            notify_telegram(email=email, ok=False,
-                            msg="IP 已被限制（Too Many Requests, 20/h），脚本已停止",
-                            screenshot_file=sp)
-            sys.exit(1)
+        r = requests.post(url, json=payload, timeout=10)
+        if r.status_code == 200:
+            print("📩 Telegram 通知发送成功！")
+        else:
+            print(f"  ⚠️ Telegram 通知发送失败: {r.text}")
+    except Exception as e:
+        print(f"  ⚠️ Telegram 通知发送异常: {e}")
+
+#  js注入脚本
+_EXPAND_JS = """
+(function() {
+    var ts = document.querySelector('input[name="cf-turnstile-response"]');
+    if (!ts) return 'no-turnstile';
+    var el = ts;
+    for (var i = 0; i < 20; i++) {
+        el = el.parentElement;
+        if (!el) break;
+        var s = window.getComputedStyle(el);
+        if (s.overflow === 'hidden' || s.overflowX === 'hidden' || s.overflowY === 'hidden')
+            el.style.overflow = 'visible';
+        el.style.minWidth = 'max-content';
+    }
+    document.querySelectorAll('iframe').forEach(function(f){
+        if (f.src && f.src.includes('challenges.cloudflare.com')) {
+            f.style.width = '300px'; f.style.height = '65px';
+            f.style.minWidth = '300px';
+            f.style.visibility = 'visible'; f.style.opacity = '1';
+        }
+    });
+    return 'done';
+})()
+"""
+
+_EXISTS_JS = """
+(function(){
+    return document.querySelector('input[name="cf-turnstile-response"]') !== null;
+})()
+"""
+
+_SOLVED_JS = """
+(function(){
+    var i = document.querySelector('input[name="cf-turnstile-response"]');
+    return !!(i && i.value && i.value.length > 20);
+})()
+"""
+
+_COORDS_JS = """
+(function(){
+    var iframes = document.querySelectorAll('iframe');
+    for (var i = 0; i < iframes.length; i++) {
+        var src = iframes[i].src || '';
+        if (src.includes('cloudflare') || src.includes('turnstile') || src.includes('challenges')) {
+            var r = iframes[i].getBoundingClientRect();
+            if (r.width > 0 && r.height > 0)
+                return {cx: Math.round(r.x + 30), cy: Math.round(r.y + r.height / 2)};
+        }
+    }
+    var inp = document.querySelector('input[name="cf-turnstile-response"]');
+    if (inp) {
+        var p = inp.parentElement;
+        for (var j = 0; j < 5; j++) {
+            if (!p) break;
+            var r = p.getBoundingClientRect();
+            if (r.width > 100 && r.height > 30)
+                return {cx: Math.round(r.x + 30), cy: Math.round(r.y + r.height / 2)};
+            p = p.parentElement;
+        }
+    }
+    return null;
+})()
+"""
+
+_WININFO_JS = """
+(function(){
+    return {
+        sx: window.screenX || 0,
+        sy: window.screenY || 0,
+        oh: window.outerHeight,
+        ih: window.innerHeight
+    };
+})()
+"""
+
+def js_fill_input(sb, selector: str, text: str):
+    safe_text = text.replace('\\', '\\\\').replace('"', '\\"')
+    sb.execute_script(f"""
+    (function(){{
+        var el = document.querySelector('{selector}');
+        if (!el) return;
+        var nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+        if (nativeInputValueSetter) {{
+            nativeInputValueSetter.call(el, "{safe_text}");
+        }} else {{
+            el.value = "{safe_text}";
+        }}
+        el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+        el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+    }})()
+    """)
+
+def _activate_window():
+    for cls in ["chrome", "chromium", "Chromium", "Chrome", "google-chrome"]:
+        try:
+            r = subprocess.run(["xdotool", "search", "--onlyvisible", "--class", cls], capture_output=True, text=True, timeout=3)
+            wids = [w for w in r.stdout.strip().split("\n") if w.strip()]
+            if wids:
+                subprocess.run(["xdotool", "windowactivate", "--sync", wids[0]], timeout=3, stderr=subprocess.DEVNULL)
+                time.sleep(0.2)
+                return
+        except Exception:
+            pass
+    try:
+        subprocess.run(["xdotool", "getactivewindow", "windowactivate"], timeout=3, stderr=subprocess.DEVNULL)
     except Exception:
         pass
 
-
-def parse_single_account() -> tuple[str, str]:
-    raw = os.environ.get("LUNES", "").strip()
-    if not raw:
-        logger.error("未设置环境变量 LUNES，请设置 LUNES=邮箱-----密码")
-        sys.exit(1)
-
+def _xdotool_click(x: int, y: int):
+    _activate_window()
     try:
-        parts = raw.split("-----")
-        if len(parts) >= 2:
-            email = parts[0].strip()
-            password = parts[1].strip()
-            if email and password:
-                logger.info(f"读取到账号: {mask_email(email)}")
-                return email, password
-        logger.error("LUNES 中邮箱或密码为空")
-        sys.exit(1)
+        subprocess.run(["xdotool", "mousemove", "--sync", str(x), str(y)], timeout=3, stderr=subprocess.DEVNULL)
+        time.sleep(0.15)
+        subprocess.run(["xdotool", "click", "1"], timeout=2, stderr=subprocess.DEVNULL)
+    except Exception:
+        os.system(f"xdotool mousemove {x} {y} click 1 2>/dev/null")
+
+def _click_turnstile(sb):
+    try:
+        coords = sb.execute_script(_COORDS_JS)
     except Exception as e:
-        logger.error(f"解析 LUNES 失败: {e}")
-        sys.exit(1)
-
-
-# ================== Cookie 持久化 ==================
-def save_cookies_to_file(driver) -> bool:
+        print(f"⚠️ 获取 Turnstile 坐标失败: {e}")
+        return
+    if not coords:
+        print("⚠️ 无法定位 Turnstile 坐标")
+        return
     try:
-        cookies = driver.get_cookies()
-        with open(COOKIE_FILE, "wb") as f:
-            pickle.dump(cookies, f)
-        logger.info(f"Cookie 已保存 ({len(cookies)} 个)")
+        wi = sb.execute_script(_WININFO_JS)
+    except Exception:
+        wi = {"sx": 0, "sy": 0, "oh": 800, "ih": 768}
+        
+    bar = wi["oh"] - wi["ih"]
+    ax  = coords["cx"] + wi["sx"]
+    ay  = coords["cy"] + wi["sy"] + bar
+    print(f"🖱️ 尝试点击 Turnstile ({ax}, {ay})")
+    _xdotool_click(ax, ay)
+
+def handle_turnstile(sb) -> bool:
+    print("🔍 处理 Cloudflare Turnstile 验证...")
+    time.sleep(2)
+    
+    if sb.execute_script(_SOLVED_JS):
+        print("✅ 已静默通过")
         return True
-    except Exception as e:
-        logger.warning(f"保存 Cookie 失败: {e}")
-        return False
 
-
-def load_cookies_from_file(driver) -> bool:
-    cookies = None
-    pkl_path = COOKIE_FILE
-    json_path = COOKIE_FILE.with_suffix(".json")
-
-    if pkl_path.exists():
-        try:
-            with open(pkl_path, "rb") as f:
-                cookies = pickle.load(f)
-            logger.info("从 pickle 读取 Cookie")
-        except Exception as e:
-            logger.warning(f"读 pickle 失败: {e}")
-
-    if cookies is None and json_path.exists():
-        try:
-            with open(json_path, "r", encoding="utf-8") as f:
-                cookies = json.load(f)
-            logger.info("从 JSON 读取 Cookie")
-        except Exception as e:
-            logger.warning(f"读 JSON 失败: {e}")
-
-    if cookies is None:
-        logger.info("Cookie 文件不存在")
-        return False
-
-    now = time.time()
-    valid = [c for c in cookies if c.get('expiry', now) > now]
-    expired = len(cookies) - len(valid)
-    if not valid:
-        logger.warning("所有 Cookie 已过期")
-        return False
-    if expired > 0:
-        logger.info(f"{expired} 个 Cookie 已过期，已过滤")
-
-    logger.info(f"加载 {len(valid)}/{len(cookies)} 个有效 Cookie...")
     for _ in range(3):
-        try:
-            driver.get(LUNES_BASE)
-            time.sleep(2)
-            break
-        except:
-            time.sleep(1)
+        try: sb.execute_script(_EXPAND_JS)
+        except Exception: pass
+        time.sleep(0.5)
 
-    added = 0
-    for cookie in valid:
-        try:
-            c = {k: v for k, v in cookie.items()
-                 if k in ['name', 'value', 'domain', 'path', 'secure', 'httpOnly', 'sameSite', 'expiry']}
-            driver.add_cookie(c)
-            added += 1
-        except Exception as e:
-            logger.warning(f"添加 Cookie ({cookie.get('name')}) 失败: {e}")
+    for attempt in range(6):
+        if sb.execute_script(_SOLVED_JS):
+            print(f"✅ Turnstile 通过（第 {attempt + 1} 次尝试）")
+            return True
+        try: sb.execute_script(_EXPAND_JS)
+        except Exception: pass
+        time.sleep(0.3)
+        
+        _click_turnstile(sb)
+        
+        for _ in range(8):
+            time.sleep(0.5)
+            if sb.execute_script(_SOLVED_JS):
+                print(f"✅ Turnstile 通过（第 {attempt + 1} 次尝试）")
+                return True
+        print(f"  ⚠️ 第 {attempt + 1} 次未通过，重试...")
 
-    logger.info(f"Cookie 加载完成 ({added}/{len(valid)})")
-    return added > 0
+    print("  ❌ Turnstile 6 次均失败")
+    return False
 
+def login(sb) -> bool:
+    print(f"🌐 打开登录页面: {LOGIN_URL}")
+    sb.uc_open_with_reconnect(LOGIN_URL, reconnect_time=5)
+    time.sleep(6)
 
-def try_cookie_login(sb) -> Optional[str]:
-    logger.info("尝试用 Cookie 恢复会话...")
-    if not load_cookies_from_file(sb.driver):
-        return None
-
-    time.sleep(1)
-    sb.driver.get(LUNES_BASE)
-    time.sleep(5)
-
-    current_url = sb.driver.current_url
-    logger.info(f"Cookie 会话 URL: {mask_url(current_url)}")
-
-    if "/login" in current_url:
-        logger.warning("Cookie 已失效（跳回登录页）")
-        return None
-    if "challenge" in current_url:
-        logger.warning("Cookie 会话触发了 CF 挑战")
-        return None
-
-    logger.info("Cookie 会话有效！已跳过登录")
-    return current_url
-
-
-# ================== 登录流程 ==================
-def clear_browser_state(sb):
-    try:
-        sb.execute_script("localStorage.clear(); sessionStorage.clear();")
-    except:
-        pass
-    try:
-        sb.delete_all_cookies()
-    except:
-        pass
-    logger.info("浏览器状态已清理")
-
-
-def handle_initial_page(sb, email: str) -> Optional[str]:
-    clear_browser_state(sb)
-
-    logger.info("访问登录页...")
-    sb.uc_open_with_reconnect(LUNES_LOGIN_URL, reconnect_time=8)
-    time.sleep(4)
-    check_and_exit_on_rate_limit(sb, email)
-
-    safe_screenshot(sb, screenshot_path("01-initial"))
-    current_url = sb.get_current_url()
-    logger.info(f"当前URL: {mask_url(current_url)}")
-
-    if "/login" not in current_url and current_url != LUNES_LOGIN_URL:
-        logger.info("页面未到达登录页，尝试强制导航...")
-        clear_browser_state(sb)
-        sb.uc_open_with_reconnect(LUNES_LOGIN_URL, reconnect_time=8)
-        time.sleep(4)
-        check_and_exit_on_rate_limit(sb, email)
-
-    logger.info("等待 Cloudflare 验证通过并加载登录表单...")
+    print("⏳ 等待 Cloudflare 验证通过...")
+    cf_passed = False
     for i in range(30):
-        check_and_exit_on_rate_limit(sb, email)
-        try:
-            sb.wait_for_element_visible('input#email', timeout=2)
-            logger.info(f"登录表单已加载（{i + 1}s）")
-            return "need_login"
-        except TimeoutException:
-            pass
-        time.sleep(1)
-
-    safe_screenshot(sb, screenshot_path("02-no-form"))
-    logger.error("未找到登录表单（CF 验证可能未通过）")
-    return None
-
-
-def fill_and_submit(sb, email: str, password: str) -> bool:
-    logger.info("填写登录信息...")
-    try:
-        sb.clear('input#email')
-    except:
-        pass
-    sb.type('input#email', email)
-    time.sleep(0.5)
-
-    try:
-        sb.clear('input#password')
-    except:
-        pass
-    sb.type('input#password', password)
-    time.sleep(0.5)
-
-    safe_screenshot(sb, screenshot_path("03-form-filled"))
-
-    logger.info("提交登录...")
-    submitted = False
-    for selector in ['button.submit-btn', 'button[type="submit"]']:
-        try:
-            sb.click(selector)
-            submitted = True
-            logger.info(f"通过 {selector} 提交")
+        page_src = sb.get_page_source() or ""
+        if 'input[name="email"]' in page_src.lower() or 'name="email"' in page_src.lower():
+            cf_passed = True
+            print(f"✅ Cloudflare 验证已通过（{i+1}s）")
             break
-        except:
-            continue
+        time.sleep(1)
+    if not cf_passed:
+        print("⚠️ Cloudflare 验证可能未通过，继续尝试...")
 
-    if not submitted:
+    try:
+        sb.wait_for_element('input[name="email"]', timeout=15)
+    except Exception:
         try:
-            sb.execute_script('document.querySelector("form").submit()')
-            submitted = True
-            logger.info("通过 JS 提交")
-        except:
-            logger.error("所有提交方式都失败")
+            sb.wait_for_element('input[name="Email"]', timeout=5)
+        except Exception:
+            print("❌ 页面未加载出登录表单")
+            cur_url = sb.get_current_url()
+            page_title = sb.get_title() or ""
+            print(f"  当前 URL: {cur_url}")
+            print(f"  当前标题: {page_title}")
+            sb.save_screenshot("login_load_fail.png")
             return False
 
-    logger.info("等待登录结果...")
-    time.sleep(6)
-    check_and_exit_on_rate_limit(sb, email)
-
-    current_url = sb.get_current_url()
-    logger.info(f"登录后URL: {mask_url(current_url)}")
-
-    if "/login" in current_url:
-        try:
-            error_msg = sb.execute_script(
-                "var el = document.querySelector('.flash-message, .error-message, .alert');"
-                "return el ? el.innerText.trim() : '';"
-            )
-            if error_msg:
-                logger.error(f"登录错误提示: {error_msg}")
-        except:
-            pass
-        safe_screenshot(sb, screenshot_path("05-login-failed"))
-        logger.error("登录失败 - 仍在登录页")
-        return False
-
-    logger.info("登录成功！")
-    return True
-
-
-def navigate_to_server(sb, email: str) -> tuple[bool, str, Optional[str]]:
-    time.sleep(3)
-    sp = screenshot_path("06-dashboard")
-    safe_screenshot(sb, sp)
-    check_and_exit_on_rate_limit(sb, email)
-
-    current_url = sb.get_current_url()
-    logger.info(f"当前URL: {mask_url(current_url)}")
-
-    # 直接跳转到服务器详情页
-    logger.info(f"跳转到服务器: {SERVER_URL}")
-    sb.driver.get(SERVER_URL)
-    time.sleep(5)
-
-    current_url = sb.get_current_url()
-    logger.info(f"详情页URL: {mask_url(current_url)}")
-
-    if "/servers/" in current_url:
-        logger.info("成功进入服务器详情页")
-        return True, SERVER_ID, sp
-
-    # 降级：尝试找服务器卡片点击
-    for sel in ['a.server-card', 'a[href*="/servers/"]', '.server-card']:
-        try:
-            sb.wait_for_element_visible(sel, timeout=5)
-            sb.click(sel)
-            time.sleep(5)
-            current_url = sb.get_current_url()
-            if "/servers/" in current_url:
-                logger.info("通过卡片点击进入服务器详情页")
-                return True, SERVER_ID, sp
-        except:
-            continue
-
-    safe_screenshot(sb, screenshot_path("07-no-server"))
+    print("🍪 关闭可能的 Cookie 弹窗...")
     try:
-        body = sb.execute_script("return document.body.innerText.trim().toLowerCase()")
-        if any(hint in body for hint in ["no server", "no servers", "没有服务器", "create a server"]):
-            logger.warning("该账号下没有服务器")
-            return False, "NO_SERVER", sp
-    except:
+        for btn in sb.find_elements("button"):
+            if "Accept" in (btn.text or ""):
+                btn.click()
+                time.sleep(0.5)
+                break
+    except Exception:
         pass
-    return False, "NAV_ERROR", sp
 
+    print(f"📧 填写邮箱...")
+    js_fill_input(sb, 'input[name="email"]', EMAIL)
+    time.sleep(0.3)
+    
+    print("🔑 填写密码...")
+    js_fill_input(sb, 'input[name="password"]', PASSWORD)
+    time.sleep(1)
 
-# ================== 从 Secret 生成 Cookie 文件 ==================
-def generate_cookie_from_secret():
-    session_val = os.environ.get("SESSION_COOKIE", "").strip()
-    if not session_val:
-        logger.info("SESSION_COOKIE 未设置，将尝试完整登录")
-        return
+    if sb.execute_script(_EXISTS_JS):
+        if not handle_turnstile(sb):
+            print("❌ 登录界面的 Turnstile 验证失败")
+            sb.save_screenshot("login_turnstile_fail.png")
+            return False
+    else:
+        print("ℹ️ 未检测到 Turnstile")
 
-    cookies = [{
-        "name": "session",
-        "value": session_val,
-        "domain": "betadash.lunes.host",
-        "path": "/",
-        "secure": True,
-        "httpOnly": True,
-        "sameSite": "Lax",
-        "expiry": 1900000000
-    }]
+    print("🖱️ 提交登录...")
+    sb.press_keys('input[name="password"]', '\n')
 
-    with open("session_cookies.pkl", "wb") as f:
-        pickle.dump(cookies, f)
-
-    with open("session_cookies.json", "w") as f:
-        json.dump(cookies, f)
-
-    logger.info(f"Cookie 文件已从 Secret 生成: {len(cookies)} 个 Cookie")
-
-
-# ================== 主登录函数 ==================
-def betadash_login(email: str, password: str, proxy: Optional[str] = None, max_retries: int = 1) -> dict:
-    result = {"success": False, "message": "", "screenshot": None}
-
-    logger.info("=" * 50)
-    logger.info(f"Lunes Host 保活 | 邮箱: {mask_email(email)}")
-    logger.info(f"服务器: {SERVER_ID}")
-    logger.info("=" * 50)
-
-    for attempt in range(max_retries):
-        if attempt > 0:
-            logger.warning("已尝试过一次，不再重试")
+    print("⏳ 等待登录跳转...")
+    for _ in range(12):
+        time.sleep(1)
+        cur_url = sb.get_current_url().split('?')[0].lower()
+        page_title = sb.get_title() or ""
+        if cur_url.startswith("https://betadash.lunes.host") or "Lunes host | Account page" in page_title.lower():
             break
 
-        try:
-            sb_kwargs = dict(
-                uc=True, test=True, locale="en",
-                headed=not is_linux(), user_data_dir=None,
-                chromium_arg="--disable-blink-features=AutomationControlled",
-            )
-            if proxy:
-                sb_kwargs["proxy"] = proxy
+    cur_url = sb.get_current_url().split('?')[0].lower()
+    page_title = sb.get_title() or ""
+    if "login" not in cur_url and "account" in page_title.lower():
+        print(f"✅ 登录成功！(URL: {sb.get_current_url()}, Title: {page_title})")
+        return True
+        
+    print(f"❌ 登录失败，页面未跳转到账户页。(URL: {sb.get_current_url()}, Title: {page_title})")
+    sb.save_screenshot("login_failed.png")
+    return False
 
-            with SB(**sb_kwargs) as sb:
-                # 第一步：优先用 Cookie 恢复会话
-                cookie_url = try_cookie_login(sb)
-                if cookie_url:
-                    logger.info("Cookie 会话有效，跳过登录流程")
-                    sb.driver.get(SERVER_URL)
-                    time.sleep(5)
-
-                    if "/servers/" in sb.driver.current_url:
-                        result.update(success=True, message=f"服务器: {SERVER_ID} (Cookie)",
-                                      screenshot=screenshot_path("cookie-direct"))
-                        logger.info("保活成功！")
-                        return result
-
-                    nav_ok, sid, sp = navigate_to_server(sb, email)
-                    if nav_ok:
-                        result.update(success=True, message=f"服务器: {sid} (Cookie+导航)")
-                        return result
-
-                # 第二步：Cookie 无效，走完整登录
-                logger.warning("Cookie 无效，走完整登录流程")
-                clear_browser_state(sb)
-
-                init_status = handle_initial_page(sb, email)
-                if init_status is None:
-                    result["message"] = "Cloudflare 绕过失败或登录表单未找到"
-                    result["screenshot"] = screenshot_path("02-cf-failed")
-                    break
-
-                if init_status == "need_login":
-                    login_ok = fill_and_submit(sb, email, password)
-                    if not login_ok:
-                        result["message"] = "登录失败（凭据错误或提交异常）"
-                        result["screenshot"] = screenshot_path("05-login-failed")
-                        break
-                    save_cookies_to_file(sb.driver)
-
-                nav_ok, server_id, sp = navigate_to_server(sb, email)
-                if nav_ok:
-                    result.update(success=True, message=f"服务器: {server_id} (新登录)", screenshot=sp)
-                    return result
-
-                if server_id == "NO_SERVER":
-                    result.update(success=True, message="登录成功，但账号下无服务器", screenshot=sp)
-                    return result
-
-                result.update(message=f"导航失败: {server_id}", screenshot=sp)
-                return result
-
-        except Exception as e:
-            logger.exception(f"执行异常: {e}")
-            result["message"] = str(e)
-
-    return result
-
-
-# ================== 主程序 ==================
-def main():
-    email, password = parse_single_account()
-    proxy = os.environ.get("PROXY_SERVER")
-    display = setup_display()
-
-    # 从 Secret 预生成 Cookie 文件
-    generate_cookie_from_secret()
-
+# ===== 修正后的 visit_server =====
+def visit_server(sb) -> (bool, dict):
+    print("🔍 正在查找服务器卡片...")
     try:
-        result = betadash_login(email, password, proxy, max_retries=1)
+        sb.wait_for_element('a.server-card', timeout=15)
+    except Exception:
+        print("❌ 未找到服务器卡片（可能没有服务器）")
+        return False, {"error": "未找到服务器卡片，可能账户无服务器"}
 
-        notify_telegram(
-            email=email,
-            ok=result["success"],
-            msg=result["message"],
-            screenshot_file=result["screenshot"],
-        )
+    cards = sb.find_elements('a.server-card')
+    if not cards:
+        return False, {"error": "未找到服务器卡片"}
 
-        if result["success"]:
-            logger.info("保活流程完成")
-            sys.exit(0)
+    card = cards[0]
+    href = card.get_attribute('href')
+    if not href:
+        return False, {"error": "卡片缺少 href 属性"}
+
+    match = re.search(r'/servers/(\d+)', href)
+    if not match:
+        return False, {"error": f"无法从 href 解析服务器 ID: {href}"}
+    server_id = match.group(1)
+
+    print(f"🖱️ 点击服务器卡片 (ID: {server_id})")
+    card.click()
+    time.sleep(3)
+
+    expected_url_prefix = f"https://betadash.lunes.host/servers/{server_id}"
+    for _ in range(10):
+        cur_url = sb.get_current_url().split('?')[0]
+        if cur_url == expected_url_prefix:
+            break
+        time.sleep(1)
+    else:
+        return False, {"server_id": server_id, "error": f"跳转后 URL 不匹配，当前: {sb.get_current_url()}"}
+
+    page_title = sb.get_title() or ""
+    server_name = ""
+    if "Server " in page_title:
+        server_name = page_title.split("Server ", 1)[-1].strip()
+    else:
+        server_name = f"ID {server_id}"
+
+    print(f"✅ 成功访问服务器: {server_name} (ID: {server_id})")
+    return True, {"server_id": server_id, "server_name": server_name}
+
+def main():
+    print("#" * 25)
+    print("   Lunes 自动登录续期")
+    print("#" * 25)
+    
+    is_proxy = os.environ.get("IS_PROXY", "false").lower() == "true"
+    sb_kwargs = {"uc": True, "headless": False}
+    
+    if is_proxy:
+        proxy_str = "http://127.0.0.1:1081"
+        print(f"🔗 挂载sing-box代理: {proxy_str}")
+        sb_kwargs["proxy"] = proxy_str
+    else:
+        print("🌐 未使用代理，直连访问")
+    
+    with SB(**sb_kwargs) as sb:
+        print("✅ 浏览器已启动")
+        try:
+            sb.open("https://api.ip.sb/ip")
+            print(f"🌐 当前出口真实 IP: {sb.get_text('body')}")
+        except Exception:
+            pass
+
+        if login(sb):
+            success, info = visit_server(sb)
+            if success:
+                extra = f"服务器: {info['server_name']}\nID: {info['server_id']}"
+                send_tg_message("✅", "续期成功")
+            else:
+                error_msg = info.get('error', '未知错误')
+                print(f"❌ 访问服务器失败: {error_msg}")
+                extra = f"错误: {error_msg}"
+                if 'server_id' in info:
+                    extra += f"\n服务器ID: {info['server_id']}"
+                send_tg_message("❌", "续期失败", extra)
         else:
-            logger.error("保活失败")
-            sys.exit(1)
-
-    finally:
-        if display:
-            display.stop()
-
+            print("\n❌ 登录失败，终止后续续期操作。")
+            send_tg_message("❌", "登录失败", "")
 
 if __name__ == "__main__":
     main()
