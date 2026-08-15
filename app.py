@@ -282,8 +282,8 @@ def login(sb) -> bool:
     else:
         print("ℹ️ 未检测到 Turnstile")
 
-    print("🖱️ 提交登录...")
-    sb.press_keys('input[name="password"]', '\n')
+    print("🖱️ 点击登录按钮提交登录...")
+    sb.click('button[type="submit"]')
 
     print("⏳ 等待登录跳转...")
     for _ in range(12):
@@ -303,7 +303,7 @@ def login(sb) -> bool:
     sb.save_screenshot("login_failed.png")
     return False
 
-# ===== 修正后的 visit_server =====
+# 访问服务器页面
 def visit_server(sb) -> (bool, dict):
     print("🔍 正在查找服务器卡片...")
     try:
