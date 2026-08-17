@@ -2,7 +2,7 @@ name: Auto-login-Lunes
 on:
   workflow_dispatch:
   schedule:
-    - cron: '5 0 7,17,27 * *' 
+    - cron: '5 3 7,17,27 * *' 
 
 jobs:
   Renew-lunes:
