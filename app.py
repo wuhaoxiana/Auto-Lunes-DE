@@ -35,7 +35,7 @@ def send_tg_message(status_icon, status_text, extra_text=""):
         masked_email = EMAIL[:2] + '****'
 
     text = (
-        f"🇺🇸 Lunes 保活通知\n\n"
+        f"🇩🇪 Lunes 保活通知\n\n"
         f"{status_icon} {status_text}\n"
         f"👤 登录账户: {masked_email}\n"
         f"⏱️ 登录时间: {current_time_str}"
